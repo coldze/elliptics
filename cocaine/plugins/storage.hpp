@@ -42,7 +42,7 @@ class log_adapter_impl_t : public blackhole::base_frontend_t
 	public:
 		log_adapter_impl_t(const std::shared_ptr<logging::log_t> &log);
 
-		virtual void handle(const blackhole::log::record_t &record);
+		virtual void handle(const blackhole::record_t &record);
 
 	private:
 		std::shared_ptr<logging::log_t> m_log;
