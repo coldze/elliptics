@@ -63,7 +63,7 @@ log_adapter_impl_t::log_adapter_impl_t(const std::shared_ptr<logging::log_t> &lo
 {
 }
 
-void log_adapter_impl_t::handle(const blackhole::log::record_t &record)
+void log_adapter_impl_t::handle(const blackhole::record_t &record)
 {
 	dnet_log_level level = record.extract<dnet_log_level>(blackhole::keyword::severity<dnet_log_level>().name());
 	auto cocaine_level = convert_verbosity(level);
@@ -71,9 +71,10 @@ void log_adapter_impl_t::handle(const blackhole::log::record_t &record)
 }
 
 log_adapter_t::log_adapter_t(const std::shared_ptr<logging::log_t> &log)
+  : ioremap::elliptics::logger_base(DNET_LOG_DEBUG)
 {
-	add_frontend(blackhole::utils::make_unique<log_adapter_impl_t>(log));
-	verbosity(convert_verbosity(log->verbosity()));
+	add_frontend(blackhole::aux::util::make_unique<log_adapter_impl_t>(log));
+	set_filter(convert_verbosity(log->verbosity()));
 }
 
 namespace {

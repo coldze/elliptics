@@ -20,32 +20,40 @@ import os
 import traceback
 import errno
 
-from elliptics_recovery.utils.misc import elliptics_create_node, RecoverStat, validate_index, INDEX_MAGIC_NUMBER_LENGTH
-from elliptics_recovery.utils.misc import load_key_data
+from elliptics_recovery.utils.misc import elliptics_create_node, RecoverStat, validate_index
+from elliptics_recovery.utils.misc import INDEX_MAGIC_NUMBER_LENGTH, load_key_data, WindowedRecovery
 
 import elliptics
 from elliptics import Address
-from elliptics.log import formatter
+from elliptics.log import formatter, convert_elliptics_log_level
 
 log = logging.getLogger()
 
 
 class KeyRecover(object):
-    def __init__(self, ctx, key, key_infos, missed_groups, node):
+    def __init__(self, ctx, key, key_infos, missed_groups, node, callback):
         self.ctx = ctx
         self.complete = threading.Event()
+        self.callback = callback
         self.stats = RecoverStat()
         self.key = key
+        self.key_flags = 0
         self.key_infos = key_infos
         self.diff_groups = []
         self.missed_groups = list(missed_groups)
 
         self.read_session = elliptics.Session(node)
+        self.read_session.trace_id = ctx.trace_id
         self.read_session.set_filter(elliptics.filters.all)
+
         self.write_session = elliptics.Session(node)
+        self.write_session.trace_id = ctx.trace_id
         self.write_session.set_checker(elliptics.checkers.all)
+
         self.remove_session = elliptics.Session(node)
+        self.remove_session.trace_id = ctx.trace_id
         self.remove_session.set_checker(elliptics.checkers.all)
+
         self.result = False
         self.attempt = 0
 
@@ -64,7 +72,7 @@ class KeyRecover(object):
         same_uncommitted = [info for info in same_infos if info.flags & elliptics.record_flags.uncommitted]
         if same_uncommitted == same_infos:
             # if all such keys have exceeded prepare timeout - remove all replicas
-            # else skip recovering because the key is under writting and can be committed in nearest future.
+            # else skip recovering because the key is under writing and can be committed in nearest future.
             same_groups = [info.group_id for info in same_infos]
             if same_infos[0].timestamp < self.ctx.prepare_timeout:
                 self.remove_session.groups = [info.group_id for info in self.key_infos]
@@ -92,6 +100,7 @@ class KeyRecover(object):
 
         same_meta = lambda lhs, rhs: (lhs.timestamp, lhs.size) == (rhs.timestamp, rhs.size)
         same_infos = [info for info in self.key_infos if same_meta(info, same_infos[0])]
+        self.key_flags = same_infos[0].flags
 
         self.same_groups = [info.group_id for info in same_infos]
         self.key_infos = [info for info in self.key_infos if info.group_id not in self.same_groups]
@@ -115,6 +124,7 @@ class KeyRecover(object):
         self.result = result
         log.debug("Finished recovering key: {0} with result: {1}".format(self.key, self.result))
         self.complete.set()
+        self.callback(self.result, self.stats)
 
     def read(self):
         try:
@@ -125,7 +135,11 @@ class KeyRecover(object):
                 size = min(self.total_size - self.recovered_size, self.ctx.chunk_size)
             # do not check checksum for all but the first chunk
             if self.recovered_size != 0:
-                self.read_session.ioflags |= elliptics.io_flags.nocsum
+                if self.key_flags & elliptics.record_flags.chunked_csum:
+                    # if record was checksummed by chunks there is no need to disable checksum verification
+                    self.read_session.ioflags &= ~elliptics.io_flags.nocsum
+                else:
+                    self.read_session.ioflags |= elliptics.io_flags.nocsum
             else:
                 # first read should be at least INDEX_MAGIC_NUMBER_LENGTH bytes
                 size = min(self.total_size, max(size, INDEX_MAGIC_NUMBER_LENGTH))
@@ -243,6 +257,7 @@ class KeyRecover(object):
                 self.write_session.timestamp = results[-1].timestamp
                 self.read_session.ioflags |= elliptics.io_flags.nocsum
                 self.read_session.groups = [results[-1].group_id]
+                self.key_flags = results[-1].record_flags
                 if self.total_size != results[-1].total_size:
                     self.total_size = results[-1].total_size
                     self.chunked = self.total_size > self.ctx.chunk_size
@@ -364,52 +379,39 @@ def iterate_key(filepath, groups):
                       .format(key, len(key_infos), len(groups)))
 
 
+class WindowedDC(WindowedRecovery):
+    def __init__(self, ctx, node):
+        super(WindowedDC, self).__init__(ctx, ctx.stats['recover'])
+        self.node = node
+        self.keys = iterate_key(self.ctx.merged_filename, self.ctx.groups)
+
+    def run_one(self):
+        try:
+            key = None
+            with self.lock:
+                key = next(self.keys)
+                self.recovers_in_progress += 1
+            KeyRecover(self.ctx, *key, node=self.node, callback=self.callback)
+            return True
+        except StopIteration:
+            pass
+        return False
+
+
 def recover(ctx):
-    from itertools import islice
-    import time
-    ret = True
     stats = ctx.stats['recover']
 
     stats.timer('recover', 'started')
-
-    it = iterate_key(ctx.merged_filename, ctx.groups)
-
-    elog = elliptics.Logger(ctx.log_file, int(ctx.log_level))
     node = elliptics_create_node(address=ctx.address,
-                                 elog=elog,
+                                 elog=elliptics.Logger(ctx.log_file, int(ctx.log_level)),
                                  wait_timeout=ctx.wait_timeout,
                                  net_thread_num=4,
-                                 io_thread_num=1,
+                                 io_thread_num=24,
                                  remotes=ctx.remotes)
-    processed_keys = 0
-    start = time.time()
-    while 1:
-        batch = tuple(islice(it, ctx.batch_size))
-        if not batch:
-            break
-        recovers = []
-        rs = RecoverStat()
-        for val in batch:
-            rec = KeyRecover(ctx, *val, node=node)
-            recovers.append(rec)
-        successes, failures = 0, 0
-        for r in recovers:
-            r.wait()
-            ret &= r.succeeded()
-            rs += r.stats
-            if r.succeeded():
-                successes += 1
-            else:
-                failures += 1
-        processed_keys += successes + failures
-        rs.apply(stats)
-        stats.counter('recovered_keys', successes)
-        ctx.stats.counter('recovered_keys', successes)
-        stats.counter('recovered_keys', -failures)
-        ctx.stats.counter('recovered_keys', -failures)
-        stats.set_counter('recovery_speed', processed_keys / (time.time() - start))
+    result = WindowedDC(ctx, node).run()
     stats.timer('recover', 'finished')
-    return ret
+
+    return result
 
 
 if __name__ == '__main__':
@@ -458,7 +460,7 @@ if __name__ == '__main__':
 
     ch = logging.StreamHandler(sys.stderr)
     ch.setFormatter(formatter)
-    ch.setLevel(logging.INFO)
+    ch.setLevel(logging.WARNING)
     log.addHandler(ch)
 
     if not os.path.exists(ctx.tmp_dir):
@@ -476,16 +478,17 @@ if __name__ == '__main__':
         ctx.merged_filename = os.path.join(ctx.tmp_dir,
                                            options.merged_filename)
 
-        ch.setLevel(logging.WARNING)
-        if options.debug:
-            ch.setLevel(logging.DEBUG)
-
         # FIXME: It may be inappropriate to use one log for both
         # elliptics library and python app, esp. in presence of auto-rotation
         fh = logging.FileHandler(ctx.log_file)
         fh.setFormatter(formatter)
-        fh.setLevel(logging.DEBUG)
+        fh.setLevel(convert_elliptics_log_level(ctx.log_level))
         log.addHandler(fh)
+        log.setLevel(convert_elliptics_log_level(ctx.log_level))
+
+        if options.debug:
+            log.setLevel(logging.DEBUG)
+            ch.setLevel(logging.DEBUG)
     except Exception as e:
         raise ValueError("Can't parse log_level: '{0}': {1}, traceback: {2}"
                          .format(options.elliptics_log_level, repr(e), traceback.format_exc()))

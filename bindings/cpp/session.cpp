@@ -22,6 +22,8 @@
 #include <sstream>
 #include <functional>
 
+#include <blackhole/macro.hpp>
+
 #include "node_p.hpp"
 
 #include "../../include/elliptics/async_result_cast.hpp"
@@ -469,7 +471,7 @@ void remove_on_fail_impl(session &sess_, const error_info &error, const std::vec
 	BH_LOG(log, DNET_LOG_DEBUG, "%s: failed to exec %s: %s, going to remove_data",
 		dnet_dump_id(&statuses.front().id),
 		dnet_cmd_string(statuses.front().cmd),
-		error.message());
+		error.message().c_str());
 
 	std::vector<int> rm_groups;
 	for (auto it = statuses.begin(); it != statuses.end(); ++it) {
@@ -501,18 +503,18 @@ static void create_session_data(session_data &sess, struct dnet_node *node)
 	sess.policy = session::default_exceptions;
 }
 
-session_data::session_data(const node &n) : logger(n.get_log(), blackhole::log::attributes_t())
+session_data::session_data(const node &n) : logger(n.get_log(), blackhole::attribute::set_t())
 {
 	create_session_data(*this, n.get_native());
 }
 
-session_data::session_data(dnet_node *node) : logger(*dnet_node_get_logger(node), blackhole::log::attributes_t())
+session_data::session_data(dnet_node *node) : logger(*dnet_node_get_logger(node), blackhole::attribute::set_t())
 {
 	create_session_data(*this, node);
 }
 
 session_data::session_data(session_data &other)
-	: logger(other.logger, blackhole::log::attributes_t()),
+	: logger(other.logger, blackhole::attribute::set_t()),
 	  filter(other.filter),
 	  checker(other.checker),
 	  error_handler(other.error_handler),
@@ -715,7 +717,7 @@ long session::get_timeout(void) const
 void session::set_trace_id(trace_id_t trace_id)
 {
 	dnet_session_set_trace_id(m_data->session_ptr, trace_id);
-	blackhole::log::attributes_t attributes = {
+	blackhole::attribute::set_t attributes = {
 		keyword::request_id() = trace_id
 	};
 	m_data->logger = logger(m_data->logger, std::move(attributes));
@@ -792,7 +794,7 @@ public:
 
 			BH_LOG(m_sess.get_logger(), DNET_LOG_INFO,
 				"read_callback::read-recovery: %s: going to write %llu bytes -> %s groups",
-				dnet_dump_id_str(io->id), static_cast<unsigned long long>(io->size), join_groups(m_failed_groups));
+				dnet_dump_id_str(io->id), static_cast<unsigned long long>(io->size), join_groups(m_failed_groups).c_str());
 
 			std::sort(m_failed_groups.begin(), m_failed_groups.end());
 			m_failed_groups.erase(std::unique(m_failed_groups.begin(), m_failed_groups.end()), m_failed_groups.end());
@@ -815,7 +817,7 @@ public:
 
 			BH_LOG(m_sess.get_logger(), DNET_LOG_INFO,
 				"read_callback::read-recovery: %s: write %llu bytes -> %s groups",
-				dnet_dump_id_str(io->id), static_cast<unsigned long long>(io->size), join_groups(m_failed_groups));
+				dnet_dump_id_str(io->id), static_cast<unsigned long long>(io->size), join_groups(m_failed_groups).c_str());
 
 			new_sess.write_data(write_ctl);
 		}
@@ -2195,6 +2197,7 @@ async_iterator_result session::iterator(const key &id, const data_pointer& reque
 		async_iterator_result result(*this);
 		async_result_handler<iterator_result_entry> handler(result);
 		handler.complete(create_error(-ENXIO, "iterator: groups list is empty"));
+		return result;
 	}
 
 	transform(id);

@@ -27,6 +27,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <blackhole/macro.hpp>
 
 #include "elliptics_id.h"
 #include "async_result.h"
@@ -76,6 +77,7 @@ enum elliptics_record_flags {
 	record_flags_append		= DNET_RECORD_FLAGS_APPEND,
 	record_flags_exthdr		= DNET_RECORD_FLAGS_EXTHDR,
 	record_flags_uncommitted	= DNET_RECORD_FLAGS_UNCOMMITTED,
+	record_flags_chunked_csum	= DNET_RECORD_FLAGS_CHUNKED_CSUM,
 };
 
 enum elliptics_exceptions_policy {
@@ -133,10 +135,10 @@ dnet_config& dnet_config_config(dnet_config &config) {
 class elliptics_node_python : public node, public bp::wrapper<node> {
 	public:
 		elliptics_node_python(logger_base &l)
-			: node(logger(l, blackhole::log::attributes_t())) {}
+			: node(logger(l, blackhole::attribute::set_t())) {}
 
 		elliptics_node_python(logger_base &l, dnet_config &cfg)
-			: node(logger(l, blackhole::log::attributes_t()), cfg) {}
+			: node(logger(l, blackhole::attribute::set_t()), cfg) {}
 
 		elliptics_node_python(const node &n): node(n) {}
 
@@ -220,7 +222,7 @@ void ios_base_failure_translator(const std::ios_base::failure &exc)
 	PyErr_SetString(PyExc_IOError, exc.what());
 }
 
-void logger_log(logger_base &log, int level, const char *msg)
+void logger_log(elliptics_file_logger &log, int level, const char *msg)
 {
 	BH_LOG(log, dnet_log_level(level), "%s", msg);
 }
@@ -306,19 +308,17 @@ BOOST_PYTHON_MODULE(core)
 	bp::register_exception_translator<error>(error_translator);
 	bp::register_exception_translator<std::ios_base::failure>(ios_base_failure_translator);
 
-	bp::class_<logger_base, boost::noncopyable>("AbstractLogger")
+	bp::class_<elliptics_file_logger, boost::noncopyable>(
+		"Logger", "File logger for using inside Elliptics client library",
+		bp::init<const char *, int>(bp::args("log_file", "log_level"),
+		    "__init__(self, filename, log_level)\n"
+		    "    Initializes file logger by the specified file and level of verbosity\n\n"
+		    "    logger = elliptics.Logger(\"/dev/stderr\", elliptics.log_level.debug)"))
 		.def("log", logger_log, bp::args("log_level", "log_message"),
 		    "log(self, level, message)\n"
 		    "   logs a message with level\n\n"
 		    "   logger.log(elliptics.log_level.debug, \"We've got a problem\"")
 	;
-
-	bp::class_<elliptics_file_logger, bp::bases<logger_base>, boost::noncopyable> file_logger_class(
-		"Logger", "File logger for using inside Elliptics client library",
-		bp::init<const char *, int>(bp::args("log_file", "log_level"),
-		    "__init__(self, filename, log_level)\n"
-		    "    Initializes file logger by the specified file and level of verbosity\n\n"
-		    "    logger = elliptics.Logger(\"/dev/stderr\", elliptics.log_level.debug)"));
 
 	bp::class_<dnet_config>(
 	    "Config", "Config allows override default configuration for client node")
@@ -437,13 +437,15 @@ BOOST_PYTHON_MODULE(core)
 		"remove\n    The record is removed\n"
 		"nocsum\n    The record is written without csum\n"
 		"append\n    The record is written via append\n"
-		"exthdr\n    The record is written with extended header"
-		"uncommitted\n    The record is uncommitted so it can't be read but can be writted and committed")
+		"exthdr\n    The record is written with extended header\n"
+		"uncommitted\n    The record is uncommitted so it can't be read but can be writted and committed\n"
+		"chunked_csum\n    The records is checksummed by chunks")
 		.value("remove", record_flags_remove)
 		.value("nocsum", record_flags_nocsum)
 		.value("append", record_flags_append)
 		.value("exthdr", record_flags_exthdr)
 		.value("uncommitted", record_flags_uncommitted)
+		.value("chunked_csum", record_flags_chunked_csum)
 	;
 
 	bp::enum_<blackhole::defaults::severity>("log_level",
