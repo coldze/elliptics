@@ -345,9 +345,10 @@ ell::async_write_result elliptics_storage_t::async_write_with_ttl(const std::str
 
 	COCAINE_LOG_DEBUG(
 		m_log,
-		"writing QQQQQ the '%s' object, collection: '%s'",
+		"writing the '%s' object, collection: '%s', ttl: '%d'",
 		key,
-		collection
+		collection,
+    timeout
 	);
 
 	ell::session session = m_session.clone();
