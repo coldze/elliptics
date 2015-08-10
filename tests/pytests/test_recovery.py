@@ -992,6 +992,7 @@ class TestDC:
 
         self.prepare_test_data()
 
+    @pytest.mark.xfail
     def test_recovery(self, server, simple_node):
         '''
         Runs recovery and checks recovery result
