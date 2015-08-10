@@ -1010,6 +1010,7 @@ class TestDC:
                  log_file='dc_with_uncommitted_keys.log',
                  tmp_dir='dc_with_uncommitted_keys')
 
+    @pytest.mark.xfail
     def test_check(self, server, simple_node):
         '''
         Checks that all keys from test_data are in correct state - have correct timestamp and availability.
