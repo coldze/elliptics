@@ -52,6 +52,12 @@ elliptics (2.26.5.4) unstable; urgency=low
 
  -- Kirill Smorodinnikov <shaitkir@gmail.com>  Mon, 15 Jun 2015 13:30:33 +0400
 
+elliptics (2.26.5.3-sputnik1) unstable; urgency=low
+
+  * write_with_ttl (by coldze)
+
+ -- Vitaly Isaev <isaev@corp.sputnik.ru>  Mon, 10 Aug 2015 13:39:46 +0400
+
 elliptics (2.26.5.3) unstable; urgency=low
 
   * logs: changed level of 'Failed to get VFS statistics' to NOTICE because it spams log and isn't caused by critical error.
