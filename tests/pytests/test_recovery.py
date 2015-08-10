@@ -857,6 +857,7 @@ class TestMerge:
                  log_file='merge_with_uncommitted_keys.log',
                  tmp_dir='merge_with_uncommitted_keys')
 
+    @pytest.mark.xfail
     def test_check(self, server, simple_node):
         '''
         Checks that all keys from test_data are in correct state - have correct timestamp and availability.
@@ -976,6 +977,7 @@ class TestDC:
             assert result[0].timestamp == ts
             assert result[0].group_id == group
 
+    @pytest.mark.xfail
     def test_setup(self, server, simple_node):
         '''
         Initial test cases that prepare test cluster before running recovery. It includes:
