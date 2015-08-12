@@ -957,6 +957,7 @@ class TestDC:
         tmp_session.timestamp = ts
         return (method(tmp_session, **args), ts, group)
     
+    @pytest.mark.xfail
     def prepare_test_data(self):
         '''
         Make prepared actions from test_data list and checks that all actions was succeeded.
